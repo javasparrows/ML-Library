@@ -76,3 +76,21 @@
 - [TensorFlow patch_camelyon Medical Images](https://www.tensorflow.org/datasets/catalog/patch_camelyon)
 - [Blood Cell Images](https://www.kaggle.com/datasets/paultimothymooney/blood-cells)
 - [Recursion Cellular Image Classification](https://www.kaggle.com/datasets/xhlulu/recursion-cellular-image-classification-224-jpg)
+
+# 環境構築
+
+[Poetry](https://python-poetry.org/docs/)をインストールする
+`$ curl -sSL https://install.python-poetry.org | python3 -`
+
+`$ poetry config virtualenvs.in-project true`
+
+`$ poetry init`
+
+`$ poetry install`
+
+`$ bash`
+
+もし `requirements.txt` があったら
+`$ for package in $(cat requirements.txt); do poetry add "${package}"; done`
+
+`$ poetry shell` or `$ poetry run python ***.py`で仮想環境内で Python を実行できる
