@@ -42,10 +42,10 @@
 
 | 手法名                                                                                       | 年        | 著者               | 場所 | 実装 |
 | :------------------------------------------------------------------------------------------- | :-------- | :----------------- | :--- | :--- |
-| Neocognition                                                                                 | 1980      | Fukushima & Miyake | -    |
-| LeNet-5                                                                                      | 1989-1998 | LeCun et al.       | -    |
+| [Neocognition](https://www.rctn.org/bruno/public/papers/Fukushima1980.pdf)                   | 1980      | Fukushima & Miyake | -    |
+| [LeNet-5](http://vision.stanford.edu/cs598_spring07/papers/Lecun98.pdf)                      | 1989-1998 | LeCun et al.       | -    |
 | [AlexNet](https://papers.nips.cc/paper/2012/file/c399862d3b9d6b76c8436e924a68c45b-Paper.pdf) | 2012      | Krizhevsky et al.  | -    |
-| ZFNet                                                                                        | 2013      |                    | -    |
+| [ZFNet](https://arxiv.org/abs/1311.2901)                                                     | 2013      | Zeiler & Fergus    | -    |
 | [VGGNet](https://arxiv.org/abs/1409.1556)                                                    | 2014      | Simonyan et al.    | -    |
 | [GoogLeNet](https://arxiv.org/abs/1409.4842)                                                 | 2014      | C. Szegedy et al.  | -    |
 | [ResNet](https://arxiv.org/abs/1512.03385)                                                   | 2015      | He et al.          | -    |
@@ -63,3 +63,16 @@
 | [Vision Transformer](https://openreview.net/forum?id=YicbFdNTTy) | -    | -    |
 |                                                                  | -    | -    |
 |                                                                  | -    | -    |
+
+### データセット
+
+### 画像
+
+- [CIFAR-10](http://www.cs.toronto.edu/~kriz/cifar.html)
+
+### 医療系
+
+- [ChestX-ray8](https://paperswithcode.com/dataset/chestx-ray8)
+- [TensorFlow patch_camelyon Medical Images](https://www.tensorflow.org/datasets/catalog/patch_camelyon)
+- [Blood Cell Images](https://www.kaggle.com/datasets/paultimothymooney/blood-cells)
+- [Recursion Cellular Image Classification](https://www.kaggle.com/datasets/xhlulu/recursion-cellular-image-classification-224-jpg)
