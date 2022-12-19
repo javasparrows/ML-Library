@@ -79,7 +79,36 @@
 
 # 環境構築
 
-[Poetry](https://python-poetry.org/docs/)をインストールする
+## fish & fisher
+
+`$ brew install fish`
+
+`$ curl -sL https://git.io/fisher | source && fisher install jorgebucaran/fisher`
+
+Plugin をインストール
+
+`$ fisher install simnalamburt/shellder`
+
+`$ fisher install edc/bass`
+
+`$ fisher install jethrokuan/fzf`
+
+`$ fisher install jorgebucaran/nvm.fish`
+
+`$ fisher list`
+
+を実行すると以下になる
+
+```
+jorgebucaran/fisher
+simnalamburt/shellder
+edc/bass
+jethrokuan/fzf
+jorgebucaran/nvm.fish
+```
+
+## [Poetry](https://python-poetry.org/docs/)
+
 `$ curl -sSL https://install.python-poetry.org | python3 -`
 
 `$ poetry config virtualenvs.in-project true`
@@ -94,3 +123,11 @@
 `$ for package in $(cat requirements.txt); do poetry add "${package}"; done`
 
 `$ poetry shell` or `$ poetry run python ***.py`で仮想環境内で Python を実行できる
+
+# データセット準備
+
+## CIFAR-10
+
+`$ cd dataset`
+
+`$ bash download_cifar10.sh`
