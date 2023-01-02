@@ -277,6 +277,7 @@ def train(epochs, model, criterion, optimizer, train_loader, val_loader, device)
 
 
 def saveResults(df):
+    os.makedirs("results", exist_ok=True)
     now = datetime.datetime.now()
     now = now.strftime("%Y-%m%d-%H%M%S")
     df.to_csv(f"results/result_{now}.csv", index=False)
