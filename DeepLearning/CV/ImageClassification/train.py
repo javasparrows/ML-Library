@@ -8,12 +8,13 @@ from PIL import Image
 from sklearn.preprocessing import LabelEncoder
 from datetime import datetime
 import torch.nn as nn
-import torch.optim as optim
+from torch.optim import SGD, Adam
 from torch.utils.data import Dataset
 from torchvision import datasets, transforms as T
+from torch.optim.lr_scheduler import StepLR, MultiStepLR, CosineAnnealingLR
 import matplotlib.pyplot as plt
 from cycler import cycler
-from vit import Vit
+from models.vit import ViT
 
 # DATASET = "cifar10"
 DATASET = "imagenet"
@@ -21,13 +22,16 @@ if DATASET == "cifar10":
     IMG_SIZE = 32
     BATCH_SIZE = 2048
     NUM_CLASSES = 10
+    LR = 0.01
 elif DATASET == "imagenet":
     IMG_SIZE = 224
     BATCH_SIZE = 2048
     NUM_CLASSES = 1000
+    LR = 0.001
 
-EPOCHS = 5
+EPOCHS = 20
 NUM_WORKERS = 2
+STEP_SIZE = 5
 
 plt.rcParams["axes.prop_cycle"] = cycler(
     color=[
@@ -147,7 +151,7 @@ def setTransforms(dataset="cifar10"):
 def setDatasets(train_transform, val_transform, dataset="cifar10"):
     print(f"Use {dataset} dataset.")
     if dataset == "imagenet":
-        rootDir = "../../../../datasets/ImageNet/"
+        rootDir = "../../../datasets/ImageNet/"
         train_dataset = ImageNetDataset(
             annotations_file=os.path.join(rootDir, "LOC_train_solution.csv"),
             img_dir=os.path.join(rootDir, "ILSVRC/Data/CLS-LOC/train"),
@@ -162,7 +166,7 @@ def setDatasets(train_transform, val_transform, dataset="cifar10"):
             mode="val",
         )
     elif dataset == "cifar10":
-        rootDir = "../../../../datasets/cifar10"
+        rootDir = "../../../datasets/cifar10"
         train_dataset = datasets.CIFAR10(
             rootDir, transform=train_transform, download=True
         )
@@ -196,18 +200,27 @@ def setDataloaders(train_dataset, val_dataset):
 
 def setModel():
     num_classes = NUM_CLASSES
-    channel = 3
-    model = Vit(in_channels=channel, num_classes=num_classes, image_size=IMG_SIZE)
+    model = ViT(
+        in_channels=3,
+        num_classes=num_classes,
+        num_patch_row=7,
+        image_size=IMG_SIZE,
+        dropout=0.1,
+    )
     return model
 
 
 def setUtils(model):
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
-    return criterion, optimizer
+    optimizer = SGD(model.parameters(), lr=LR, momentum=0.9)
+    # optimizer = Adam(model.parameters(), lr=LR)
+    scheduler = StepLR(optimizer, step_size=STEP_SIZE, gamma=0.5)
+    return criterion, optimizer, scheduler
 
 
-def train(epochs, model, criterion, optimizer, train_loader, val_loader, device):
+def train(
+    epochs, model, criterion, optimizer, scheduler, train_loader, val_loader, device
+):
     print(
         "\nTrain data: {} | Validation data: {}".format(
             len(train_loader.dataset), len(val_loader.dataset)
@@ -242,6 +255,8 @@ def train(epochs, model, criterion, optimizer, train_loader, val_loader, device)
             train_loss += loss.item()
             train_acc += (outputs.argmax(axis=1) == labels).sum().item()
             train_total += len(labels)
+        lr = optimizer.param_groups[0]["lr"]
+        scheduler.step()
 
         val_loss = 0
         val_acc = 0
@@ -259,6 +274,7 @@ def train(epochs, model, criterion, optimizer, train_loader, val_loader, device)
 
         result = [
             epoch + 1,
+            lr,
             train_loss / train_total,
             val_loss / val_total,
             train_acc / train_total,
@@ -266,39 +282,46 @@ def train(epochs, model, criterion, optimizer, train_loader, val_loader, device)
         ]
         results.append(result)
         print(
-            "[{}/{}] train loss {:.4f} val loss {:.4f} | train acc {:.4f} val acc {:.4f}".format(
-                epoch + 1, epochs, result[1], result[2], result[3], result[4]
+            "[{}/{}] lr: {:.6f} train loss {:.4f} val loss {:.4f} | train acc {:.4f} val acc {:.4f}".format(
+                epoch + 1, epochs, lr, result[2], result[3], result[4], result[5]
             )
         )
+        saveResults(results)
 
-    saveResults(results)
     print("Finished Training")
 
 
 def saveResults(results):
-    os.makedirs("results", exist_ok=True)
+    now = datetime.now()
+    now = now.strftime("%Y-%m%d-%H%M%S")
+    saveDir = f"results/{DATASET}/{now}"
+    os.makedirs(saveDir, exist_ok=True)
 
     df = pd.DataFrame(
         data=results,
-        columns=["epoch", "train_loss", "val_loss", "train_acc", "val_acc"],
+        columns=["epoch", "lr", "train_loss", "val_loss", "train_acc", "val_acc"],
     )
 
-    now = datetime.now()
-    now = now.strftime("%Y-%m%d-%H%M%S")
-    df.to_csv(f"results/result_{now}.csv", index=False)
+    df.to_csv(os.path.join(saveDir, f"result_{now}.csv"), index=False)
     plt.figure(figsize=(6, 4), tight_layout=True)
     plt.plot(df["epoch"], df["train_loss"], label="train_loss")
     plt.plot(df["epoch"], df["val_loss"], label="val_loss")
     plt.xticks(df["epoch"])
     plt.legend()
-    plt.savefig("results/loss_{now}.jpg")
+    plt.savefig(os.path.join(saveDir, f"loss_{now}.jpg"))
 
     plt.figure(figsize=(6, 4), tight_layout=True)
     plt.plot(df["epoch"], df["train_acc"], label="train_acc")
     plt.plot(df["epoch"], df["val_acc"], label="val_acc")
     plt.xticks(df["epoch"])
     plt.legend()
-    plt.savefig("results/acc_{now}.jpg")
+    plt.savefig(os.path.join(saveDir, f"acc_{now}.jpg"))
+
+    plt.figure(figsize=(6, 4), tight_layout=True)
+    plt.plot(df["epoch"], df["lr"], label="lr")
+    plt.xticks(df["epoch"])
+    plt.legend()
+    plt.savefig(os.path.join(saveDir, f"lr_{now}.jpg"))
 
 
 if __name__ == "__main__":
@@ -309,5 +332,7 @@ if __name__ == "__main__":
     )
     train_loader, val_loader = setDataloaders(train_dataset, val_dataset)
     model = setModel()
-    criterion, optimizer = setUtils(model)
-    train(EPOCHS, model, criterion, optimizer, train_loader, val_loader, device)
+    criterion, optimizer, scheduler = setUtils(model)
+    train(
+        EPOCHS, model, criterion, optimizer, scheduler, train_loader, val_loader, device
+    )
