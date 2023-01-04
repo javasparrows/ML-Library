@@ -17,6 +17,8 @@ from cycler import cycler
 from models.vit import ViT
 from models.alexnet import AlexNet
 
+torch.backends.cudnn.benchmark = True
+
 # DATASET = "cifar10"
 DATASET = "imagenet"
 if DATASET == "cifar10":
@@ -26,16 +28,18 @@ if DATASET == "cifar10":
     LR = 0.01
 elif DATASET == "imagenet":
     IMG_SIZE = 224
-    BATCH_SIZE = 512
+    BATCH_SIZE = 2048
     NUM_CLASSES = 1000
-    LR = 0.01
+    LR = 0.1
 
 # MODEL_NAME = "SimpleCNN"
-MODEL_NAME = "AlexNet"
-# MODEL_NAME = "ViT"
+# MODEL_NAME = "AlexNet"
+MODEL_NAME = "ViT"
+
+USE_AMP = True
 
 EPOCHS = 60
-NUM_WORKERS = 2
+NUM_WORKERS = 4
 STEP_SIZE = 20
 
 plt.rcParams["axes.prop_cycle"] = cycler(
@@ -132,7 +136,8 @@ def setTransforms(dataset="cifar10"):
         val_transform = T.Compose(
             [
                 T.ToTensor(),
-                T.Resize([IMG_SIZE, IMG_SIZE]),
+                # T.Resize([IMG_SIZE, IMG_SIZE]),
+                T.CenterCrop(IMG_SIZE),
                 T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
             ]
         )
@@ -238,6 +243,7 @@ def train(
     train_loader,
     val_loader,
     device,
+    use_amp,
     model_name,
 ):
     print(
@@ -246,13 +252,15 @@ def train(
         )
     )
     print(f"Input shape = {next(iter(train_loader))[0].shape}")
-    print(f"{epochs} epochs training is going to run.\n")
+    print(f"{epochs} epochs training is going to run.")
+    print(f"Automatic Mixed Precision mode is {use_amp}.\n")
 
     now = datetime.now()
     now = now.strftime("%Y-%m%d-%H%M")
 
     model = model.to(device)
     results = []
+    scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
     for epoch in range(epochs):  # loop over the dataset multiple times
         train_loss = 0
         train_acc = 0
@@ -267,12 +275,18 @@ def train(
             # zero the parameter gradients
             optimizer.zero_grad()
 
-            # forward + backward + optimize
-            outputs = model(inputs)
-            # print(outputs)
-            loss = criterion(outputs, labels)
-            loss.backward()
-            optimizer.step()
+            with torch.cuda.amp.autocast(enabled=use_amp):
+                # forward + backward + optimize
+                outputs = model(inputs)
+                # print(outputs)
+                loss = criterion(outputs, labels)
+
+            # Scales loss.  Calls backward() on scaled loss to create scaled gradients.
+            scaler.scale(loss).backward()
+            # scaler.step() first unscales the gradients of the optimizer's assigned params.
+            scaler.step(optimizer)
+            # Updates the scale for next iteration.
+            scaler.update()
 
             # print statistics
             train_loss += loss.item()
@@ -375,5 +389,6 @@ if __name__ == "__main__":
         train_loader,
         val_loader,
         device,
+        USE_AMP,
         MODEL_NAME,
     )
