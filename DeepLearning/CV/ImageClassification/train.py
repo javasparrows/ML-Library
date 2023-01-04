@@ -15,6 +15,7 @@ from torch.optim.lr_scheduler import StepLR, MultiStepLR, CosineAnnealingLR
 import matplotlib.pyplot as plt
 from cycler import cycler
 from models.vit import ViT
+from models.alexnet import AlexNet
 
 # DATASET = "cifar10"
 DATASET = "imagenet"
@@ -25,13 +26,17 @@ if DATASET == "cifar10":
     LR = 0.01
 elif DATASET == "imagenet":
     IMG_SIZE = 224
-    BATCH_SIZE = 2048
+    BATCH_SIZE = 512
     NUM_CLASSES = 1000
-    LR = 0.001
+    LR = 0.01
 
-EPOCHS = 20
+# MODEL_NAME = "SimpleCNN"
+MODEL_NAME = "AlexNet"
+# MODEL_NAME = "ViT"
+
+EPOCHS = 60
 NUM_WORKERS = 2
-STEP_SIZE = 5
+STEP_SIZE = 20
 
 plt.rcParams["axes.prop_cycle"] = cycler(
     color=[
@@ -198,15 +203,21 @@ def setDataloaders(train_dataset, val_dataset):
     return train_loader, val_loader
 
 
-def setModel():
+def setModel(model_name):
     num_classes = NUM_CLASSES
-    model = ViT(
-        in_channels=3,
-        num_classes=num_classes,
-        num_patch_row=7,
-        image_size=IMG_SIZE,
-        dropout=0.1,
-    )
+    if model_name == "AlexNet":
+        model = AlexNet(
+            num_classes=num_classes,
+            dropout=0.1,
+        )
+    if model_name == "ViT":
+        model = ViT(
+            in_channels=3,
+            num_classes=num_classes,
+            num_patch_row=7,
+            image_size=IMG_SIZE,
+            dropout=0.1,
+        )
     return model
 
 
@@ -219,7 +230,15 @@ def setUtils(model):
 
 
 def train(
-    epochs, model, criterion, optimizer, scheduler, train_loader, val_loader, device
+    epochs,
+    model,
+    criterion,
+    optimizer,
+    scheduler,
+    train_loader,
+    val_loader,
+    device,
+    model_name,
 ):
     print(
         "\nTrain data: {} | Validation data: {}".format(
@@ -228,6 +247,10 @@ def train(
     )
     print(f"Input shape = {next(iter(train_loader))[0].shape}")
     print(f"{epochs} epochs training is going to run.\n")
+
+    now = datetime.now()
+    now = now.strftime("%Y-%m%d-%H%M")
+
     model = model.to(device)
     results = []
     for epoch in range(epochs):  # loop over the dataset multiple times
@@ -286,15 +309,13 @@ def train(
                 epoch + 1, epochs, lr, result[2], result[3], result[4], result[5]
             )
         )
-        saveResults(results)
+        saveResults(results, now, model_name)
 
     print("Finished Training")
 
 
-def saveResults(results):
-    now = datetime.now()
-    now = now.strftime("%Y-%m%d-%H%M%S")
-    saveDir = f"results/{DATASET}/{now}"
+def saveResults(results, now, model_name):
+    saveDir = f"results/{DATASET}/{now}_{model_name}"
     os.makedirs(saveDir, exist_ok=True)
 
     df = pd.DataFrame(
@@ -304,24 +325,36 @@ def saveResults(results):
 
     df.to_csv(os.path.join(saveDir, f"result_{now}.csv"), index=False)
     plt.figure(figsize=(6, 4), tight_layout=True)
+    plt.title(f"{model_name} {DATASET} {now}")
     plt.plot(df["epoch"], df["train_loss"], label="train_loss")
     plt.plot(df["epoch"], df["val_loss"], label="val_loss")
     plt.xticks(df["epoch"])
+    plt.xlabel("epoch")
+    plt.ylabel("loss")
     plt.legend()
-    plt.savefig(os.path.join(saveDir, f"loss_{now}.jpg"))
+    plt.savefig(os.path.join(saveDir, f"loss.jpg"))
+    plt.close()
 
     plt.figure(figsize=(6, 4), tight_layout=True)
+    plt.title(f"{model_name} {DATASET} {now}")
     plt.plot(df["epoch"], df["train_acc"], label="train_acc")
     plt.plot(df["epoch"], df["val_acc"], label="val_acc")
     plt.xticks(df["epoch"])
+    plt.xlabel("epoch")
+    plt.ylabel("accuracy")
     plt.legend()
-    plt.savefig(os.path.join(saveDir, f"acc_{now}.jpg"))
+    plt.savefig(os.path.join(saveDir, f"acc.jpg"))
+    plt.close()
 
     plt.figure(figsize=(6, 4), tight_layout=True)
+    plt.title(f"{model_name} {DATASET} {now}")
     plt.plot(df["epoch"], df["lr"], label="lr")
     plt.xticks(df["epoch"])
+    plt.xlabel("epoch")
+    plt.ylabel("learning rate")
     plt.legend()
-    plt.savefig(os.path.join(saveDir, f"lr_{now}.jpg"))
+    plt.savefig(os.path.join(saveDir, f"lr.jpg"))
+    plt.close()
 
 
 if __name__ == "__main__":
@@ -331,8 +364,16 @@ if __name__ == "__main__":
         train_transform, val_transform, dataset=DATASET
     )
     train_loader, val_loader = setDataloaders(train_dataset, val_dataset)
-    model = setModel()
+    model = setModel(MODEL_NAME)
     criterion, optimizer, scheduler = setUtils(model)
     train(
-        EPOCHS, model, criterion, optimizer, scheduler, train_loader, val_loader, device
+        EPOCHS,
+        model,
+        criterion,
+        optimizer,
+        scheduler,
+        train_loader,
+        val_loader,
+        device,
+        MODEL_NAME,
     )
