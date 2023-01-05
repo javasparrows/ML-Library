@@ -1,8 +1,10 @@
 import os
 import sys
 import yaml
+import time
 import torch
 import torchvision
+import argparse
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
@@ -18,6 +20,11 @@ import matplotlib.pyplot as plt
 from cycler import cycler
 from models.vit import ViT
 from models.alexnet import AlexNet
+
+
+parser = argparse.ArgumentParser(description="Config file")
+parser.add_argument("yaml_path", type=str, help="path to yaml file")
+args = parser.parse_args()
 
 
 plt.rcParams["axes.prop_cycle"] = cycler(
@@ -241,13 +248,16 @@ def train(
     print(f"{epochs} epochs training is going to run.")
     print(f"Automatic Mixed Precision mode is {use_amp}.\n")
 
-    now = datetime.now()
-    now = now.strftime("%Y-%m%d-%H%M")
+    start = datetime.now()
+    start_str = start.strftime("%Y-%m%d-%H%M")
+    start_time = time.time()
 
     model = model.to(device)
     results = []
     scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
     for epoch in range(epochs):  # loop over the dataset multiple times
+        start_epoch = time.time()
+
         train_loss = 0
         train_acc = 0
         train_total = 0
@@ -302,41 +312,65 @@ def train(
             val_loss / len(val_loader),
             train_acc / train_total,
             val_acc / val_total,
+            time.time() - start_time,
+            time.time() - start_epoch,
         ]
         results.append(result)
         print(
-            "[{}/{}] lr: {:.6f} train loss {:.4f} val loss {:.4f} | train acc {:.4f} val acc {:.4f}".format(
-                epoch + 1, epochs, lr, result[2], result[3], result[4], result[5]
+            "[{}/{}] lr: {:.6f} train loss {:.4f} val loss {:.4f} | train acc {:.4f} val acc {:.4f} time: {:.1f}m".format(
+                epoch + 1,
+                epochs,
+                lr,
+                result[2],
+                result[3],
+                result[4],
+                result[5],
+                result[6] / 60,
             )
         )
-        saveResults(results, now, cfg)
+        saveResults(results, start_str, cfg)
 
-    print("Finished Training")
+    elapsed_time = time.time() - start_time
+    print(f"Finished Training. Elapsed time is {int(elapsed_time/60)}m")
 
 
-def saveResults(results, now, cfg):
+def saveResults(results, start_str, cfg):
     dataset = cfg["DATASET"]
     model_name = cfg["MODEL_NAME"]
-    saveDir = f"results/{dataset}/{now}_{model_name}"
+    saveDir = f"results/{dataset}/{start_str}_{model_name}"
     os.makedirs(saveDir, exist_ok=True)
 
     df = pd.DataFrame(
         data=results,
-        columns=["epoch", "lr", "train_loss", "val_loss", "train_acc", "val_acc"],
+        columns=[
+            "epoch",
+            "lr",
+            "train_loss",
+            "val_loss",
+            "train_acc",
+            "val_acc",
+            "elapsed_time",
+            "epoch_time",
+        ],
     )
 
-    df.to_csv(os.path.join(saveDir, f"result_{now}.csv"), index=False)
+    df.to_csv(os.path.join(saveDir, f"result_{start_str}.csv"), index=False)
+
     plt.figure(figsize=(6, 10), tight_layout=True)
+
     plt.subplot(3, 1, 1)
-    plt.title(f"{model_name} {dataset} {now}")
+    plt.title(f"{model_name} {dataset} {start_str}")
     plt.plot(df["epoch"], df["train_loss"], label="train_loss")
     plt.plot(df["epoch"], df["val_loss"], label="val_loss")
     plt.xlabel("epoch")
     plt.ylabel("loss")
+    ymax = df["val_loss"].values.tolist()[4] * 1.2 if len(df) > 5 else 3
+    ymin = df["val_loss"].values.tolist()[-1] * 0.9
+    plt.ylim(ymin, ymax)
     plt.legend()
 
     # plt.figure(figsize=(6, 4), tight_layout=True)
-    plt.title(f"{model_name} {dataset} {now}")
+    plt.title(f"{model_name} {dataset} {start_str}")
     plt.subplot(3, 1, 2)
     plt.plot(df["epoch"], df["train_acc"], label="train_acc")
     plt.plot(df["epoch"], df["val_acc"], label="val_acc")
@@ -346,7 +380,7 @@ def saveResults(results, now, cfg):
 
     # plt.figure(figsize=(6, 4), tight_layout=True)
     plt.subplot(3, 1, 3)
-    plt.title(f"{model_name} {dataset} {now}")
+    plt.title(f"{model_name} {dataset} {start_str}")
     plt.plot(df["epoch"], df["lr"], label="lr")
     plt.xlabel("epoch")
     plt.ylabel("learning rate")
@@ -368,8 +402,7 @@ def readCfg(path):
 
 
 if __name__ == "__main__":
-    cfg = readCfg("config/vit_cifar10.yaml")
-    # cfg = readCfg("config/vit_imagenet.yaml")
+    cfg = readCfg(args.yaml_path)
     device = checkEnv(cfg)
     train_transform, val_transform = setTransforms(cfg)
     train_dataset, val_dataset = setDatasets(train_transform, val_transform, cfg)
