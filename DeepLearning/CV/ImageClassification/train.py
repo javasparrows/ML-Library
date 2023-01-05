@@ -1,4 +1,6 @@
 import os
+import sys
+import yaml
 import torch
 import torchvision
 import numpy as np
@@ -17,30 +19,6 @@ from cycler import cycler
 from models.vit import ViT
 from models.alexnet import AlexNet
 
-torch.backends.cudnn.benchmark = True
-
-# DATASET = "cifar10"
-DATASET = "imagenet"
-if DATASET == "cifar10":
-    IMG_SIZE = 32
-    BATCH_SIZE = 2048
-    NUM_CLASSES = 10
-    LR = 0.01
-elif DATASET == "imagenet":
-    IMG_SIZE = 224
-    BATCH_SIZE = 2048
-    NUM_CLASSES = 1000
-    LR = 0.1
-
-# MODEL_NAME = "SimpleCNN"
-# MODEL_NAME = "AlexNet"
-MODEL_NAME = "ViT"
-
-USE_AMP = True
-
-EPOCHS = 60
-NUM_WORKERS = 4
-STEP_SIZE = 20
 
 plt.rcParams["axes.prop_cycle"] = cycler(
     color=[
@@ -58,7 +36,7 @@ plt.rcParams["axes.prop_cycle"] = cycler(
 )
 
 
-def checkEnv():
+def checkEnv(cfg):
     print(torch.__version__)
     print(torchvision.__version__)
     if torch.backends.mps.is_available():
@@ -69,6 +47,9 @@ def checkEnv():
         device = "cpu"
 
     print(f"device = {device}")
+
+    torch.backends.cudnn.benchmark = cfg["BENCHMARK"]
+    print(f"cudnn benchmark = {cfg['BENCHMARK']}")
     return device
 
 
@@ -123,12 +104,14 @@ class ImageNetDataset(Dataset):
         return self.df["ImageId"].values.tolist()
 
 
-def setTransforms(dataset="cifar10"):
+def setTransforms(cfg):
+    dataset = cfg["DATASET"]
+    img_size = cfg["IMG_SIZE"]
     if dataset == "imagenet":
         train_transform = T.Compose(
             [
                 T.ToTensor(),
-                T.RandomResizedCrop(IMG_SIZE),
+                T.RandomResizedCrop(img_size),
                 T.RandomHorizontalFlip(),
                 T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
             ]
@@ -136,8 +119,7 @@ def setTransforms(dataset="cifar10"):
         val_transform = T.Compose(
             [
                 T.ToTensor(),
-                # T.Resize([IMG_SIZE, IMG_SIZE]),
-                T.CenterCrop(IMG_SIZE),
+                T.CenterCrop(img_size),
                 T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
             ]
         )
@@ -145,6 +127,7 @@ def setTransforms(dataset="cifar10"):
         train_transform = T.Compose(
             [
                 T.ToTensor(),
+                T.Resize([img_size, img_size]),
                 T.RandomHorizontalFlip(),
                 T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
             ]
@@ -152,13 +135,15 @@ def setTransforms(dataset="cifar10"):
         val_transform = T.Compose(
             [
                 T.ToTensor(),
+                T.Resize([img_size, img_size]),
                 T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
             ]
         )
     return train_transform, val_transform
 
 
-def setDatasets(train_transform, val_transform, dataset="cifar10"):
+def setDatasets(train_transform, val_transform, cfg):
+    dataset = cfg["DATASET"]
     print(f"Use {dataset} dataset.")
     if dataset == "imagenet":
         rootDir = "../../../datasets/ImageNet/"
@@ -189,27 +174,31 @@ def setDatasets(train_transform, val_transform, dataset="cifar10"):
     return train_dataset, val_dataset
 
 
-def setDataloaders(train_dataset, val_dataset):
+def setDataloaders(train_dataset, val_dataset, cfg):
+    batch_size = cfg["BATCH_SIZE"]
+    num_workers = cfg["NUM_WORKERS"]
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
-        batch_size=BATCH_SIZE,
+        batch_size=batch_size,
         shuffle=True,
-        num_workers=NUM_WORKERS,
+        num_workers=num_workers,
         pin_memory=True,
     )
 
     val_loader = torch.utils.data.DataLoader(
         val_dataset,
-        batch_size=BATCH_SIZE,
+        batch_size=batch_size,
         shuffle=False,
-        num_workers=NUM_WORKERS,
+        num_workers=num_workers,
         pin_memory=True,
     )
     return train_loader, val_loader
 
 
-def setModel(model_name):
-    num_classes = NUM_CLASSES
+def setModel(cfg):
+    model_name = cfg["MODEL_NAME"]
+    num_classes = cfg["NUM_CLASSES"]
+    image_size = cfg["IMG_SIZE"]
     if model_name == "AlexNet":
         model = AlexNet(
             num_classes=num_classes,
@@ -219,33 +208,26 @@ def setModel(model_name):
         model = ViT(
             in_channels=3,
             num_classes=num_classes,
-            num_patch_row=7,
-            image_size=IMG_SIZE,
+            num_patch_row=cfg["NUM_PATCH_ROW"],
+            image_size=image_size,
             dropout=0.1,
         )
     return model
 
 
-def setUtils(model):
+def setUtils(model, cfg):
     criterion = nn.CrossEntropyLoss()
-    optimizer = SGD(model.parameters(), lr=LR, momentum=0.9)
+    optimizer = SGD(model.parameters(), lr=cfg["LR"], momentum=0.9)
     # optimizer = Adam(model.parameters(), lr=LR)
-    scheduler = StepLR(optimizer, step_size=STEP_SIZE, gamma=0.5)
+    scheduler = StepLR(optimizer, step_size=cfg["STEP_SIZE"], gamma=0.5)
     return criterion, optimizer, scheduler
 
 
 def train(
-    epochs,
-    model,
-    criterion,
-    optimizer,
-    scheduler,
-    train_loader,
-    val_loader,
-    device,
-    use_amp,
-    model_name,
+    model, criterion, optimizer, scheduler, train_loader, val_loader, device, cfg
 ):
+    epochs = cfg["EPOCHS"]
+    use_amp = cfg["USE_AMP"]
     print(
         "\nTrain data: {} | Validation data: {}".format(
             len(train_loader.dataset), len(val_loader.dataset)
@@ -323,13 +305,15 @@ def train(
                 epoch + 1, epochs, lr, result[2], result[3], result[4], result[5]
             )
         )
-        saveResults(results, now, model_name)
+        saveResults(results, now, cfg)
 
     print("Finished Training")
 
 
-def saveResults(results, now, model_name):
-    saveDir = f"results/{DATASET}/{now}_{model_name}"
+def saveResults(results, now, cfg):
+    dataset = [cfg["DATASET"]]
+    model_name = cfg["MODEL_NAME"]
+    saveDir = f"results/{dataset}/{now}_{model_name}"
     os.makedirs(saveDir, exist_ok=True)
 
     df = pd.DataFrame(
@@ -339,10 +323,9 @@ def saveResults(results, now, model_name):
 
     df.to_csv(os.path.join(saveDir, f"result_{now}.csv"), index=False)
     plt.figure(figsize=(6, 4), tight_layout=True)
-    plt.title(f"{model_name} {DATASET} {now}")
+    plt.title(f"{model_name} {dataset} {now}")
     plt.plot(df["epoch"], df["train_loss"], label="train_loss")
     plt.plot(df["epoch"], df["val_loss"], label="val_loss")
-    plt.xticks(df["epoch"])
     plt.xlabel("epoch")
     plt.ylabel("loss")
     plt.legend()
@@ -350,10 +333,9 @@ def saveResults(results, now, model_name):
     plt.close()
 
     plt.figure(figsize=(6, 4), tight_layout=True)
-    plt.title(f"{model_name} {DATASET} {now}")
+    plt.title(f"{model_name} {dataset} {now}")
     plt.plot(df["epoch"], df["train_acc"], label="train_acc")
     plt.plot(df["epoch"], df["val_acc"], label="val_acc")
-    plt.xticks(df["epoch"])
     plt.xlabel("epoch")
     plt.ylabel("accuracy")
     plt.legend()
@@ -361,9 +343,8 @@ def saveResults(results, now, model_name):
     plt.close()
 
     plt.figure(figsize=(6, 4), tight_layout=True)
-    plt.title(f"{model_name} {DATASET} {now}")
+    plt.title(f"{model_name} {dataset} {now}")
     plt.plot(df["epoch"], df["lr"], label="lr")
-    plt.xticks(df["epoch"])
     plt.xlabel("epoch")
     plt.ylabel("learning rate")
     plt.legend()
@@ -371,24 +352,25 @@ def saveResults(results, now, model_name):
     plt.close()
 
 
+def readCfg(path):
+    try:
+        with open(path) as file:
+            obj = yaml.safe_load(file)
+            print(obj)
+            return obj
+    except Exception as e:
+        print("Exception occurred while loading YAML...", file=sys.stderr)
+        print(e, file=sys.stderr)
+        sys.exit(1)
+
+
 if __name__ == "__main__":
-    device = checkEnv()
-    train_transform, val_transform = setTransforms(dataset=DATASET)
-    train_dataset, val_dataset = setDatasets(
-        train_transform, val_transform, dataset=DATASET
-    )
-    train_loader, val_loader = setDataloaders(train_dataset, val_dataset)
-    model = setModel(MODEL_NAME)
-    criterion, optimizer, scheduler = setUtils(model)
-    train(
-        EPOCHS,
-        model,
-        criterion,
-        optimizer,
-        scheduler,
-        train_loader,
-        val_loader,
-        device,
-        USE_AMP,
-        MODEL_NAME,
-    )
+    cfg = readCfg("config/vit_cifar10.yaml")
+    # cfg = readCfg("config/vit_imagenet.yaml")
+    device = checkEnv(cfg)
+    train_transform, val_transform = setTransforms(cfg)
+    train_dataset, val_dataset = setDatasets(train_transform, val_transform, cfg)
+    train_loader, val_loader = setDataloaders(train_dataset, val_dataset, cfg)
+    model = setModel(cfg)
+    criterion, optimizer, scheduler = setUtils(model, cfg)
+    train(model, criterion, optimizer, scheduler, train_loader, val_loader, device, cfg)
