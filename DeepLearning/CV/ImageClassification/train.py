@@ -219,7 +219,11 @@ def setUtils(model, cfg):
     criterion = nn.CrossEntropyLoss()
     optimizer = SGD(model.parameters(), lr=cfg["LR"], momentum=0.9)
     # optimizer = Adam(model.parameters(), lr=LR)
-    scheduler = StepLR(optimizer, step_size=cfg["STEP_SIZE"], gamma=0.5)
+    scheduler = StepLR(
+        optimizer,
+        step_size=cfg["SCHEDULER"]["STEP_SIZE"],
+        gamma=cfg["SCHEDULER"]["GAMMA"],
+    )
     return criterion, optimizer, scheduler
 
 
@@ -311,7 +315,7 @@ def train(
 
 
 def saveResults(results, now, cfg):
-    dataset = [cfg["DATASET"]]
+    dataset = cfg["DATASET"]
     model_name = cfg["MODEL_NAME"]
     saveDir = f"results/{dataset}/{now}_{model_name}"
     os.makedirs(saveDir, exist_ok=True)
@@ -322,33 +326,32 @@ def saveResults(results, now, cfg):
     )
 
     df.to_csv(os.path.join(saveDir, f"result_{now}.csv"), index=False)
-    plt.figure(figsize=(6, 4), tight_layout=True)
+    plt.figure(figsize=(6, 10), tight_layout=True)
+    plt.subplot(3, 1, 1)
     plt.title(f"{model_name} {dataset} {now}")
     plt.plot(df["epoch"], df["train_loss"], label="train_loss")
     plt.plot(df["epoch"], df["val_loss"], label="val_loss")
     plt.xlabel("epoch")
     plt.ylabel("loss")
     plt.legend()
-    plt.savefig(os.path.join(saveDir, f"loss.jpg"))
-    plt.close()
 
-    plt.figure(figsize=(6, 4), tight_layout=True)
+    # plt.figure(figsize=(6, 4), tight_layout=True)
     plt.title(f"{model_name} {dataset} {now}")
+    plt.subplot(3, 1, 2)
     plt.plot(df["epoch"], df["train_acc"], label="train_acc")
     plt.plot(df["epoch"], df["val_acc"], label="val_acc")
     plt.xlabel("epoch")
     plt.ylabel("accuracy")
     plt.legend()
-    plt.savefig(os.path.join(saveDir, f"acc.jpg"))
-    plt.close()
 
-    plt.figure(figsize=(6, 4), tight_layout=True)
+    # plt.figure(figsize=(6, 4), tight_layout=True)
+    plt.subplot(3, 1, 3)
     plt.title(f"{model_name} {dataset} {now}")
     plt.plot(df["epoch"], df["lr"], label="lr")
     plt.xlabel("epoch")
     plt.ylabel("learning rate")
     plt.legend()
-    plt.savefig(os.path.join(saveDir, f"lr.jpg"))
+    plt.savefig(os.path.join(saveDir, f"result.jpg"))
     plt.close()
 
 
