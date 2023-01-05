@@ -294,8 +294,8 @@ def train(
         result = [
             epoch + 1,
             lr,
-            train_loss / train_total,
-            val_loss / val_total,
+            train_loss / len(train_loader),
+            val_loss / len(val_loader),
             train_acc / train_total,
             val_acc / val_total,
         ]
