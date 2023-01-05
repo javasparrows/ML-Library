@@ -52,8 +52,8 @@ def torch_fix_seed(seed=42):
     # Pytorch
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.use_deterministic_algorithms = True
+    # torch.backends.cudnn.deterministic = True
+    # torch.use_deterministic_algorithms = True
 
 
 def checkEnv(cfg):
@@ -244,8 +244,9 @@ def setUtils(model, lr):
     return criterion, optimizer, scheduler
 
 
-def train(model, device, train_dataset, val_dataset, lr, cfg):
+def train(device, train_dataset, val_dataset, lr, cfg):
     use_amp = cfg["USE_AMP"]
+    model = setModel(cfg)
 
     train_loader, val_loader = setDataloaders(
         train_dataset, val_dataset, cfg, shuffle=False
@@ -263,18 +264,14 @@ def train(model, device, train_dataset, val_dataset, lr, cfg):
         train_total = 0
         for data in train_loader:
             model.train()
-            # get the inputs; data is a list of [inputs, labels]
             inputs, labels = data
             inputs = inputs.to(device)
             labels = labels.to(device)
 
-            # zero the parameter gradients
             optimizer.zero_grad()
 
             with torch.cuda.amp.autocast(enabled=use_amp):
-                # forward + backward + optimize
                 outputs = model(inputs)
-                # print(outputs)
                 loss = criterion(outputs, labels)
 
             # Scales loss.  Calls backward() on scaled loss to create scaled gradients.
@@ -284,10 +281,10 @@ def train(model, device, train_dataset, val_dataset, lr, cfg):
             # Updates the scale for next iteration.
             scaler.update()
 
-            # print statistics
             train_loss += loss.item()
             train_acc += (outputs.argmax(axis=1) == labels).sum().item()
             train_total += len(labels)
+
         scheduler.step()
 
         val_loss = 0
@@ -304,17 +301,17 @@ def train(model, device, train_dataset, val_dataset, lr, cfg):
                 val_acc += (outputs.argmax(axis=1) == labels).sum().item()
                 val_total += len(labels)
 
-        val_loss_list.append(
-            val_loss / len(val_loader),
-        )
+        val_loss_list.append(val_loss / len(val_loader))
         val_acc_list.append(val_acc / val_total)
 
-    val_loss = sum(val_loss_list[2:]) / len(val_loss_list[2:])
-    val_acc = sum(val_acc_list[2:]) / len(val_acc_list[2:])
+    val_loss_list = val_loss_list[-3:]
+    val_acc_list = val_acc_list[-3:]
+    val_loss = sum(val_loss_list) / len(val_loss_list)
+    val_acc = sum(val_acc_list) / len(val_acc_list)
     return val_loss, val_acc
 
 
-def train_grid(model, device, cfg):
+def train_grid(device, cfg):
     use_amp = cfg["USE_AMP"]
     train_transform, val_transform = setTransforms(cfg)
     train_dataset, val_dataset = setDatasets(train_transform, val_transform, cfg)
@@ -338,15 +335,15 @@ def train_grid(model, device, cfg):
     for i in range(num_samples):
         print(f"Grid searching for sample {i+1}...")
         lr = lr_search[i]
-        val_loss, val_acc = train(model, device, train_dataset, val_dataset, lr, cfg)
+        val_loss, val_acc = train(device, train_dataset, val_dataset, lr, cfg)
         results.append([lr, val_loss, val_acc])
         # saveResults(results, start_str, cfg)
 
-        print("| ... |      lr | val loss | val acc |")
+        print("| ... |      lr  | val loss| val acc |")
         for result in results:
             print(
                 "| ... | {:.6f} | {:.5f} | {:.5f} |".format(
-                    result[0], result[1], result[1]
+                    result[0], result[1], result[2]
                 )
             )
 
@@ -421,8 +418,7 @@ def readCfg(path):
 
 
 if __name__ == "__main__":
-    torch_fix_seed()
+    # torch_fix_seed()
     cfg = readCfg(args.yaml_path)
     device = checkEnv(cfg)
-    model = setModel(cfg)
-    train_grid(model, device, cfg)
+    train_grid(device, cfg)
