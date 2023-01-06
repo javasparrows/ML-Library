@@ -224,7 +224,7 @@ def setModel(cfg):
 
 def setUtils(model, cfg):
     criterion = nn.CrossEntropyLoss()
-    optimizer = SGD(model.parameters(), lr=cfg["LR"], momentum=0.9)
+    optimizer = SGD(model.parameters(), lr=cfg["LR"]["INIT"], momentum=0.9)
     # optimizer = Adam(model.parameters(), lr=LR)
     scheduler = StepLR(
         optimizer,

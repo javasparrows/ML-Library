@@ -67,6 +67,9 @@ def checkEnv(cfg):
         device = "cpu"
 
     print(f"device = {device}")
+
+    torch.backends.cudnn.benchmark = cfg["BENCHMARK"]
+    print(f"cudnn benchmark = {cfg['BENCHMARK']}")
     return device
 
 
@@ -244,7 +247,7 @@ def setUtils(model, lr):
     return criterion, optimizer, scheduler
 
 
-def train(device, train_dataset, val_dataset, lr, cfg):
+def OneGrid(device, train_dataset, val_dataset, lr, cfg):
     use_amp = cfg["USE_AMP"]
     model = setModel(cfg)
 
@@ -258,7 +261,7 @@ def train(device, train_dataset, val_dataset, lr, cfg):
     val_acc_list = []
     scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
 
-    for _ in tqdm(range(5)):
+    for _ in tqdm(range(cfg["SEARCH_EPOCHS"])):
         train_loss = 0
         train_acc = 0
         train_total = 0
@@ -311,7 +314,7 @@ def train(device, train_dataset, val_dataset, lr, cfg):
     return val_loss, val_acc
 
 
-def train_grid(device, cfg):
+def GridSearch(device, cfg):
     use_amp = cfg["USE_AMP"]
     train_transform, val_transform = setTransforms(cfg)
     train_dataset, val_dataset = setDatasets(train_transform, val_transform, cfg)
@@ -326,28 +329,167 @@ def train_grid(device, cfg):
     print(f"Input shape = {next(iter(train_loader))[0].shape}")
     print(f"Automatic Mixed Precision mode is {use_amp}.\n")
 
-    num_samples = 5
-
-    lr_max = cfg["LR"]["MAX"]
-    lr_min = cfg["LR"]["MIN"]
-    lr_search = np.linspace(lr_max, lr_min, num_samples)
-    results = []
-    for i in range(num_samples):
+    lr_list = [float(lr) for lr in cfg["LR"]["SEARCH"]]
+    val_loss_list, val_acc_list = [], []
+    for i in range(len(lr_list)):
         print(f"Grid searching for sample {i+1}...")
-        lr = lr_search[i]
-        val_loss, val_acc = train(device, train_dataset, val_dataset, lr, cfg)
-        results.append([lr, val_loss, val_acc])
-        # saveResults(results, start_str, cfg)
+        lr = lr_list[i]
+        val_loss, val_acc = OneGrid(device, train_dataset, val_dataset, lr, cfg)
+        val_loss_list.append(val_loss)
+        val_acc_list.append(val_acc)
 
         print("| ... |      lr  | val loss| val acc |")
-        for result in results:
-            print(
-                "| ... | {:.6f} | {:.5f} | {:.5f} |".format(
-                    result[0], result[1], result[2]
-                )
-            )
+        for lr, loss, acc in zip(lr_list, val_loss_list, val_acc_list):
+            print("| ... | {:.6f} | {:.5f} | {:.5f} |".format(lr, loss, acc))
+        print("")
 
-    print("Finished Training.")
+    lr_array, val_loss_array, val_acc_array = removeNan(
+        lr_list, val_loss_list, val_acc_list
+    )
+
+    result = softmax(val_acc_array) - softmax(val_loss_array)
+    best_params = {"lr": lr_array[np.argmax(result)]}
+    print(f"Picking up the best params from {lr_array.tolist()}.\n")
+    print(f"softmax(val_acc_list) = {softmax(val_acc_array)}")
+    print(f"softmax(val_loss_list) = {softmax(val_loss_array)}")
+    print(f"result = {result}")
+    print(f"best_params: {best_params}")
+
+    print("\nFinished Training.\n")
+    return best_params
+
+
+def removeNan(lr_list, val_loss_list, val_acc_list):
+    lr_array = np.array(lr_list)
+    val_loss_array = np.array(val_loss_list)
+    val_acc_array = np.array(val_acc_list)
+
+    notNan = val_loss_array < 100
+    print("")
+    for idx in np.argwhere(notNan == False):
+        idx = idx[0]
+        print(
+            "Discard lr={:.6f} because loss={:.1f} is too large.".format(
+                float(lr_array[idx]), float(val_loss_array[idx])
+            )
+        )
+    print("")
+    lr_array = lr_array[notNan]
+    val_loss_array = val_loss_array[notNan]
+    val_acc_array = val_acc_array[notNan]
+    return lr_array, val_loss_array, val_acc_array
+
+
+def softmax(x):
+    u = np.sum(np.exp(x))
+    return np.exp(x) / u
+
+
+def train(best_params, device, cfg):
+    epochs = cfg["EPOCHS"]
+    use_amp = cfg["USE_AMP"]
+    disable = cfg["VERBOSE"] == 0
+
+    train_transform, val_transform = setTransforms(cfg)
+    train_dataset, val_dataset = setDatasets(train_transform, val_transform, cfg)
+    train_loader, val_loader = setDataloaders(
+        train_dataset, val_dataset, cfg, shuffle=True
+    )
+    print(
+        "\nTrain data: {} | Validation data: {}".format(
+            len(train_loader.dataset), len(val_loader.dataset)
+        )
+    )
+    print(f"Input shape = {next(iter(train_loader))[0].shape}")
+    print(f"{epochs} epochs training is going to run.")
+    print(f"Automatic Mixed Precision mode is {use_amp}.\n")
+
+    start = datetime.now()
+    start_str = start.strftime("%Y-%m%d-%H%M")
+    start_time = time.time()
+
+    model = setModel(cfg)
+    criterion, optimizer, scheduler = setUtils(model, best_params["lr"])
+    model = model.to(device)
+    results = []
+    scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+    for epoch in range(epochs):  # loop over the dataset multiple times
+        start_epoch = time.time()
+
+        train_loss = 0
+        train_acc = 0
+        train_total = 0
+        for data in tqdm(train_loader, disable=disable):
+            model.train()
+            # get the inputs; data is a list of [inputs, labels]
+            inputs, labels = data
+            inputs = inputs.to(device)
+            labels = labels.to(device)
+
+            # zero the parameter gradients
+            optimizer.zero_grad()
+
+            with torch.cuda.amp.autocast(enabled=use_amp):
+                # forward + backward + optimize
+                outputs = model(inputs)
+                # print(outputs)
+                loss = criterion(outputs, labels)
+
+            # Scales loss.  Calls backward() on scaled loss to create scaled gradients.
+            scaler.scale(loss).backward()
+            # scaler.step() first unscales the gradients of the optimizer's assigned params.
+            scaler.step(optimizer)
+            # Updates the scale for next iteration.
+            scaler.update()
+
+            # print statistics
+            train_loss += loss.item()
+            train_acc += (outputs.argmax(axis=1) == labels).sum().item()
+            train_total += len(labels)
+        lr = optimizer.param_groups[0]["lr"]
+        scheduler.step()
+
+        val_loss = 0
+        val_acc = 0
+        val_total = 0
+        model.eval()
+        with torch.no_grad():
+            for data in tqdm(val_loader, disable=disable):
+                inputs, labels = data
+                inputs = inputs.to(device)
+                labels = labels.to(device)
+                outputs = model(inputs)
+                val_loss += criterion(outputs, labels).item()
+                val_acc += (outputs.argmax(axis=1) == labels).sum().item()
+                val_total += len(labels)
+
+        result = [
+            epoch + 1,
+            lr,
+            train_loss / len(train_loader),
+            val_loss / len(val_loader),
+            train_acc / train_total,
+            val_acc / val_total,
+            time.time() - start_time,
+            time.time() - start_epoch,
+        ]
+        results.append(result)
+        print(
+            "[{}/{}] lr: {:.6f} train loss {:.4f} val loss {:.4f} | train acc {:.4f} val acc {:.4f} time: {:.1f}m".format(
+                epoch + 1,
+                epochs,
+                lr,
+                result[2],
+                result[3],
+                result[4],
+                result[5],
+                result[6] / 60,
+            )
+        )
+        saveResults(results, start_str, cfg)
+
+    elapsed_time = time.time() - start_time
+    print(f"Finished Training. Elapsed time is {int(elapsed_time/60)}m\n\n")
 
 
 def saveResults(results, start_str, cfg):
@@ -421,4 +563,5 @@ if __name__ == "__main__":
     # torch_fix_seed()
     cfg = readCfg(args.yaml_path)
     device = checkEnv(cfg)
-    train_grid(device, cfg)
+    best_params = GridSearch(device, cfg)
+    train(best_params, device, cfg)
