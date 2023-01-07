@@ -143,4 +143,5 @@ jorgebucaran/nvm.fish
 - https://pystyle.info/pytorch-resnet/
 
 ### torchvisionを使って簡単に書くなら以下
+AlexNet、GoogLeNet、MobileNetV3、EfficientNetなども以下と同じコードで簡単に実装できる
 - https://take-tech-engineer.com/pytorch-models/
