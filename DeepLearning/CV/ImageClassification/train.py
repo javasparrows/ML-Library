@@ -2,6 +2,7 @@ import os
 import sys
 import yaml
 import time
+import random
 import torch
 import torchvision
 import argparse
@@ -13,7 +14,7 @@ from sklearn.preprocessing import LabelEncoder
 from datetime import datetime
 import torch.nn as nn
 from torch.optim import SGD, Adam
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, random_split
 from torchvision import datasets, transforms as T
 from torch.optim.lr_scheduler import StepLR, MultiStepLR, CosineAnnealingLR
 import matplotlib.pyplot as plt
@@ -41,6 +42,18 @@ plt.rcParams["axes.prop_cycle"] = cycler(
         "#BAB0AC",
     ]
 )
+
+
+def torch_fix_seed(seed=42):
+    # Python random
+    random.seed(seed)
+    # Numpy
+    np.random.seed(seed)
+    # Pytorch
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    # torch.backends.cudnn.deterministic = True
+    # torch.use_deterministic_algorithms = True
 
 
 def checkEnv(cfg):
@@ -181,13 +194,13 @@ def setDatasets(train_transform, val_transform, cfg):
     return train_dataset, val_dataset
 
 
-def setDataloaders(train_dataset, val_dataset, cfg):
+def setDataloaders(train_dataset, val_dataset, cfg, shuffle=True):
     batch_size = cfg["BATCH_SIZE"]
     num_workers = cfg["NUM_WORKERS"]
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=batch_size,
-        shuffle=True,
+        shuffle=shuffle,
         num_workers=num_workers,
         pin_memory=True,
     )
@@ -203,6 +216,7 @@ def setDataloaders(train_dataset, val_dataset, cfg):
 
 
 def setModel(cfg):
+    print('\nPreparing model...\n')
     model_name = cfg["MODEL_NAME"]
     num_classes = cfg["NUM_CLASSES"]
     image_size = cfg["IMG_SIZE"]
@@ -222,9 +236,10 @@ def setModel(cfg):
     return model
 
 
-def setUtils(model, cfg):
+def setUtils(model, lr):
+    print("\nPreparing utils...\n")
     criterion = nn.CrossEntropyLoss()
-    optimizer = SGD(model.parameters(), lr=cfg["LR"]["INIT"], momentum=0.9)
+    optimizer = SGD(model.parameters(), lr=lr, momentum=0.9)
     # optimizer = Adam(model.parameters(), lr=LR)
     scheduler = StepLR(
         optimizer,
@@ -234,11 +249,166 @@ def setUtils(model, cfg):
     return criterion, optimizer, scheduler
 
 
-def train(
-    model, criterion, optimizer, scheduler, train_loader, val_loader, device, cfg
-):
+def OneGrid(device, train_dataset, val_dataset, lr, cfg):
+    use_amp = cfg["USE_AMP"]
+    model = setModel(cfg)
+
+    train_loader, val_loader = setDataloaders(
+        train_dataset, val_dataset, cfg, shuffle=False
+    )
+
+    criterion, optimizer, scheduler = setUtils(model, lr)
+    model = model.to(device)
+    val_loss_list = []
+    val_acc_list = []
+    scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+
+    for _ in tqdm(range(cfg["SEARCH_EPOCHS"])):
+        train_loss = 0
+        train_acc = 0
+        train_total = 0
+        for i, data in enumerate(train_loader):
+            model.train()
+            inputs, labels = data
+            inputs = inputs.to(device)
+            labels = labels.to(device)
+
+            optimizer.zero_grad()
+
+            with torch.cuda.amp.autocast(enabled=use_amp):
+                outputs = model(inputs)
+                loss = criterion(outputs, labels)
+
+            # Scales loss.  Calls backward() on scaled loss to create scaled gradients.
+            scaler.scale(loss).backward()
+            # scaler.step() first unscales the gradients of the optimizer's assigned params.
+            scaler.step(optimizer)
+            # Updates the scale for next iteration.
+            scaler.update()
+
+            train_loss += loss.item()
+            train_acc += (outputs.argmax(axis=1) == labels).sum().item()
+            train_total += len(labels)
+
+            if (train_loss / (i + 1)) > 100:
+                print(
+                    f"Stopped grid search for this sample. train loss is too large, {(train_loss / (i+1))}"
+                )
+                return 1e5, 0
+
+        scheduler.step()
+
+        val_loss = 0
+        val_acc = 0
+        val_total = 0
+        model.eval()
+        with torch.no_grad():
+            for i, data in enumerate(val_loader):
+                inputs, labels = data
+                inputs = inputs.to(device)
+                labels = labels.to(device)
+                outputs = model(inputs)
+                val_loss += criterion(outputs, labels).item()
+                val_acc += (outputs.argmax(axis=1) == labels).sum().item()
+                val_total += len(labels)
+
+                if (val_loss / (i + 1)) > 100:
+                    print(
+                        f"Stopped grid search for this sample. val loss is too large, {(val_loss / (i+1))}"
+                    )
+                    return 1e5, 0
+
+        val_loss_list.append(val_loss / len(val_loader))
+        val_acc_list.append(val_acc / val_total)
+
+    val_loss_list = val_loss_list[-3:]
+    val_acc_list = val_acc_list[-3:]
+    val_loss = sum(val_loss_list) / len(val_loss_list)
+    val_acc = sum(val_acc_list) / len(val_acc_list)
+    return val_loss, val_acc
+
+
+def GridSearch(device, cfg):
+    use_amp = cfg["USE_AMP"]
+    train_transform, val_transform = setTransforms(cfg)
+    train_dataset, val_dataset = setDatasets(train_transform, val_transform, cfg)
+    train_loader, val_loader = setDataloaders(
+        train_dataset, val_dataset, cfg, shuffle=False
+    )
+    print(
+        "\nTrain data: {} | Validation data: {}".format(
+            len(train_loader.dataset), len(val_loader.dataset)
+        )
+    )
+    print(f"Input shape = {next(iter(train_loader))[0].shape}")
+    print(f"Automatic Mixed Precision mode is {use_amp}.\n")
+
+    lr_list = [float(lr) for lr in cfg["LR"]["SEARCH"]]
+    num_samples = len(lr_list)
+    val_loss_list, val_acc_list = [], []
+    for i in range(num_samples):
+        print(f"Grid searching for sample {i+1}/{num_samples}...")
+        lr = lr_list[i]
+        val_loss, val_acc = OneGrid(device, train_dataset, val_dataset, lr, cfg)
+        val_loss_list.append(val_loss)
+        val_acc_list.append(val_acc)
+
+        torch.cuda.empty_cache()
+
+        print("| ... |      lr  | val loss| val acc |")
+        for lr, loss, acc in zip(lr_list, val_loss_list, val_acc_list):
+            print("| ... | {:.6f} | {:.5f} | {:.5f} |".format(lr, loss, acc))
+        print("")
+
+    lr_array, val_loss_array, val_acc_array = removeNan(
+        lr_list, val_loss_list, val_acc_list
+    )
+
+    best_params = {"LR": {"INIT": lr_array[np.argmax(val_acc_array)]}}
+    print(f"Picking up the best params from {lr_array.tolist()}.\n")
+    print(f"best_params: {best_params}")
+
+    print("\nFinished Training.\n")
+    torch.cuda.empty_cache()
+    return best_params
+
+
+def removeNan(lr_list, val_loss_list, val_acc_list):
+    lr_array = np.array(lr_list)
+    val_loss_array = np.array(val_loss_list)
+    val_acc_array = np.array(val_acc_list)
+
+    notNan = val_loss_array < 100
+    print("")
+    for idx in np.argwhere(notNan == False):
+        idx = idx[0]
+        print(
+            "Discard lr={:.6f} because loss={:.1f} is too large.".format(
+                float(lr_array[idx]), float(val_loss_array[idx])
+            )
+        )
+    print("")
+    lr_array = lr_array[notNan]
+    val_loss_array = val_loss_array[notNan]
+    val_acc_array = val_acc_array[notNan]
+    return lr_array, val_loss_array, val_acc_array
+
+
+def softmax(x):
+    u = np.sum(np.exp(x))
+    return np.exp(x) / u
+
+
+def train(best_params, device, cfg):
     epochs = cfg["EPOCHS"]
     use_amp = cfg["USE_AMP"]
+    disable = cfg["VERBOSE"] == 0
+
+    train_transform, val_transform = setTransforms(cfg)
+    train_dataset, val_dataset = setDatasets(train_transform, val_transform, cfg)
+    train_loader, val_loader = setDataloaders(
+        train_dataset, val_dataset, cfg, shuffle=True
+    )
     print(
         "\nTrain data: {} | Validation data: {}".format(
             len(train_loader.dataset), len(val_loader.dataset)
@@ -252,6 +422,8 @@ def train(
     start_str = start.strftime("%Y-%m%d-%H%M")
     start_time = time.time()
 
+    model = setModel(cfg)
+    criterion, optimizer, scheduler = setUtils(model, best_params["LR"]["INIT"])
     model = model.to(device)
     results = []
     scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
@@ -261,7 +433,7 @@ def train(
         train_loss = 0
         train_acc = 0
         train_total = 0
-        for data in tqdm(train_loader):
+        for data in tqdm(train_loader, disable=disable):
             model.train()
             # get the inputs; data is a list of [inputs, labels]
             inputs, labels = data
@@ -296,7 +468,7 @@ def train(
         val_total = 0
         model.eval()
         with torch.no_grad():
-            for data in tqdm(val_loader):
+            for data in tqdm(val_loader, disable=disable):
                 inputs, labels = data
                 inputs = inputs.to(device)
                 labels = labels.to(device)
@@ -331,7 +503,7 @@ def train(
         saveResults(results, start_str, cfg)
 
     elapsed_time = time.time() - start_time
-    print(f"Finished Training. Elapsed time is {int(elapsed_time/60)}m")
+    print(f"Finished Training. Elapsed time is {int(elapsed_time/60)}m\n\n")
 
 
 def saveResults(results, start_str, cfg):
@@ -402,11 +574,16 @@ def readCfg(path):
 
 
 if __name__ == "__main__":
+    # torch_fix_seed()
     cfg = readCfg(args.yaml_path)
     device = checkEnv(cfg)
-    train_transform, val_transform = setTransforms(cfg)
-    train_dataset, val_dataset = setDatasets(train_transform, val_transform, cfg)
-    train_loader, val_loader = setDataloaders(train_dataset, val_dataset, cfg)
-    model = setModel(cfg)
-    criterion, optimizer, scheduler = setUtils(model, cfg)
-    train(model, criterion, optimizer, scheduler, train_loader, val_loader, device, cfg)
+    if "SEARCH" in cfg["LR"]:
+        cfg["LR"]["SEARCH"]
+        print("\nStarting grid search...\n")
+        best_params = GridSearch(device, cfg)
+        print("\nStart training.\n")
+        train(best_params, device, cfg)
+    else:
+        print("\nSkip grid search. Start training...\n")
+        best_params = cfg
+        train(best_params, device, cfg)
