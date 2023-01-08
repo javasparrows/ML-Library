@@ -5,6 +5,7 @@ import time
 import random
 import torch
 import torchvision
+import torchinfo
 import argparse
 import numpy as np
 import pandas as pd
@@ -17,6 +18,7 @@ from torch.optim import SGD, Adam
 from torch.utils.data import Dataset, random_split
 from torchvision import datasets, transforms as T
 from torch.optim.lr_scheduler import StepLR, MultiStepLR, CosineAnnealingLR
+from torchsummary import summary
 import matplotlib.pyplot as plt
 from cycler import cycler
 from models.vit import ViT
@@ -216,7 +218,7 @@ def setDataloaders(train_dataset, val_dataset, cfg, shuffle=True):
 
 
 def setModel(cfg):
-    print('\nPreparing model...\n')
+    print("\nPreparing model...")
     model_name = cfg["MODEL_NAME"]
     num_classes = cfg["NUM_CLASSES"]
     image_size = cfg["IMG_SIZE"]
@@ -237,7 +239,7 @@ def setModel(cfg):
 
 
 def setUtils(model, lr):
-    print("\nPreparing utils...\n")
+    print("\nPreparing utils...")
     criterion = nn.CrossEntropyLoss()
     optimizer = SGD(model.parameters(), lr=lr, momentum=0.9)
     # optimizer = Adam(model.parameters(), lr=LR)
@@ -399,6 +401,29 @@ def softmax(x):
     return np.exp(x) / u
 
 
+def print_summary(cfg):
+    batch_size, channels, H, W = (
+        cfg["BATCH_SIZE"],
+        cfg["NUM_CHANNEL"],
+        cfg["IMG_SIZE"],
+        cfg["IMG_SIZE"],
+    )
+    model = setModel(cfg)
+    torchinfo.summary(
+        model,
+        input_size=(batch_size, channels, H, W),
+        col_names=[
+            "input_size",
+            "output_size",
+            "num_params",
+            "kernel_size",
+            "mult_adds",
+        ],
+    )
+    del model
+    torch.cuda.empty_cache()
+
+
 def train(best_params, device, cfg):
     epochs = cfg["EPOCHS"]
     use_amp = cfg["USE_AMP"]
@@ -422,11 +447,13 @@ def train(best_params, device, cfg):
     start_str = start.strftime("%Y-%m%d-%H%M")
     start_time = time.time()
 
+    print_summary(cfg)
     model = setModel(cfg)
     criterion, optimizer, scheduler = setUtils(model, best_params["LR"]["INIT"])
     model = model.to(device)
     results = []
     scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+    print("\nStart training\n")
     for epoch in range(epochs):  # loop over the dataset multiple times
         start_epoch = time.time()
 
