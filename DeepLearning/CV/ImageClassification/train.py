@@ -129,20 +129,31 @@ class ImageNetDataset(Dataset):
 def setTransforms(cfg):
     dataset = cfg["DATASET"]
     img_size = cfg["IMG_SIZE"]
+    normalize = T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     if dataset == "imagenet":
         train_transform = T.Compose(
             [
                 T.ToTensor(),
-                T.RandomResizedCrop(img_size),
+                T.CenterCrop(256),
                 T.RandomHorizontalFlip(),
-                T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+                T.RandomResizedCrop(img_size),
+                normalize,
+                # T.TenCrop(224),
+                # T.Lambda(
+                #     lambda crops: torch.stack([normalize(crop) for crop in crops])
+                # ),
             ]
         )
         val_transform = T.Compose(
             [
                 T.ToTensor(),
-                T.CenterCrop(img_size),
-                T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+                T.CenterCrop(256),
+                T.Resize([img_size, img_size]),
+                # T.TenCrop(224),
+                # T.Lambda(
+                #     lambda crops: torch.stack([normalize(crop) for crop in crops])
+                # ),
+                normalize,
             ]
         )
     elif dataset == "cifar10":
@@ -151,14 +162,14 @@ def setTransforms(cfg):
                 T.ToTensor(),
                 T.Resize([img_size, img_size]),
                 T.RandomHorizontalFlip(),
-                T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+                normalize,
             ]
         )
         val_transform = T.Compose(
             [
                 T.ToTensor(),
                 T.Resize([img_size, img_size]),
-                T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+                normalize,
             ]
         )
     return train_transform, val_transform
@@ -421,7 +432,19 @@ def print_summary(cfg):
         ],
     )
     del model
-    torch.cuda.empty_cache()
+
+
+def TTA(model, inputs):
+    if len(inputs.size()) == 4:
+        outputs = model(inputs)
+    elif len(inputs.size()) == 5:
+        bs, ncrops, c, h, w = inputs.size()
+        outputs_sum = torch.zeros(model(torch.select(inputs, 1, 0)).size()).to(device)
+        for i in range(ncrops):
+            inputs_crop = torch.select(inputs, 1, i)
+            outputs_sum += model(inputs_crop)
+        outputs = outputs_sum / ncrops
+    return outputs
 
 
 def train(best_params, device, cfg):
@@ -472,8 +495,7 @@ def train(best_params, device, cfg):
 
             with torch.cuda.amp.autocast(enabled=use_amp):
                 # forward + backward + optimize
-                outputs = model(inputs)
-                # print(outputs)
+                outputs = TTA(model, inputs)
                 loss = criterion(outputs, labels)
 
             # Scales loss.  Calls backward() on scaled loss to create scaled gradients.
@@ -499,7 +521,8 @@ def train(best_params, device, cfg):
                 inputs, labels = data
                 inputs = inputs.to(device)
                 labels = labels.to(device)
-                outputs = model(inputs)
+                # outputs = model(inputs)
+                outputs = TTA(model, inputs)
                 val_loss += criterion(outputs, labels).item()
                 val_acc += (outputs.argmax(axis=1) == labels).sum().item()
                 val_total += len(labels)
@@ -507,10 +530,10 @@ def train(best_params, device, cfg):
         result = [
             epoch + 1,
             lr,
-            train_loss / len(train_loader),
-            val_loss / len(val_loader),
-            train_acc / train_total,
-            val_acc / val_total,
+            round(train_loss / len(train_loader), 5),
+            round(val_loss / len(val_loader), 5),
+            round(train_acc / train_total, 5),
+            round(val_acc / val_total, 5),
             time.time() - start_time,
             time.time() - start_epoch,
         ]
